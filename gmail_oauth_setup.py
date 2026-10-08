@@ -93,17 +93,42 @@ def run_oauth_flow():
         print(f"[ERROR] Failed to write gmail_token.json: {exc}")
         sys.exit(1)
 
+    # Automatically update .streamlit/secrets.toml if it exists
+    secrets_file = os.path.join(os.path.dirname(__file__), ".streamlit", "secrets.toml")
+    if os.path.exists(secrets_file):
+        try:
+            with open(secrets_file, "r", encoding="utf-8") as sf:
+                secrets_content = sf.read()
+            
+            # Replace GMAIL_REFRESH_TOKEN = "..." or append it
+            if "GMAIL_REFRESH_TOKEN" in secrets_content:
+                secrets_content = re.sub(
+                    r'GMAIL_REFRESH_TOKEN\s*=\s*["\'].*?["\']',
+                    f'GMAIL_REFRESH_TOKEN = "{creds.refresh_token}"',
+                    secrets_content,
+                )
+            else:
+                secrets_content += f'\nGMAIL_REFRESH_TOKEN = "{creds.refresh_token}"\n'
+
+            with open(secrets_file, "w", encoding="utf-8") as sf:
+                sf.write(secrets_content)
+            print("      Updated local .streamlit/secrets.toml with your GMAIL_REFRESH_TOKEN!")
+        except Exception as sec_exc:
+            print(f"      [Notice] Could not auto-update secrets.toml: {sec_exc}")
+
     print("\n" + "=" * 65)
     print("   AUTHORIZATION SUCCESSFUL!")
     print("=" * 65)
     print("ReceiptWise is now authorized to send expense summaries via Gmail API.")
     print(f"\nSaved token file: {TOKEN_FILE}")
-    print("\nTo deploy on Render or Streamlit Cloud without files, configure these")
-    print("Environment Variables in your Render Dashboard / Streamlit Secrets:")
-    print("  - GMAIL_CLIENT_ID     : (from credentials.json)")
-    print("  - GMAIL_CLIENT_SECRET : (from credentials.json)")
-    print("  - GMAIL_REFRESH_TOKEN : (from gmail_token.json)")
-    print("  - GMAIL_ADDRESS       : (your authorized Gmail address)")
+    print("\nNEXT STEP: Deploying on Streamlit Cloud & Render:")
+    print("  1. In Streamlit Cloud: Click 'Manage app' (bottom-right) > ⋮ > 'Settings' > 'Secrets'.")
+    print("     Paste the updated contents of your .streamlit/secrets.toml there.")
+    print("  2. In Render: Go to Environment and set:")
+    print("     - GMAIL_CLIENT_ID")
+    print("     - GMAIL_CLIENT_SECRET")
+    print("     - GMAIL_REFRESH_TOKEN")
+    print("     - GMAIL_ADDRESS")
     print("\n(Note: Keep your refresh token and client secret private. Never commit them to Git.)\n")
 
 
