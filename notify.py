@@ -1,5 +1,7 @@
 import json
+import re
 import smtplib
+import urllib.parse
 from email.mime.text import MIMEText
 
 def clean_whatsapp_text(text: str) -> str:
@@ -9,63 +11,128 @@ def clean_whatsapp_text(text: str) -> str:
     cleaned = " ".join(text.split())
     return cleaned[:1500] + "..." if len(cleaned) > 1500 else cleaned
 
-def send_whatsapp(to_number: str, user_name: str, summary: str, account_sid: str, auth_token: str, from_number: str, content_sid: str = "") -> tuple[bool, str]:
+def clean_phone_number(number: str) -> str:
+    """Normalizes phone numbers, stripping spaces/dashes and ensuring leading plus."""
+    digits = re.sub(r"[^\d+]", "", str(number).strip())
+    if digits and not digits.startswith("+"):
+        digits = f"+{digits}"
+    return digits
+
+def generate_whatsapp_web_url(to_number: str, text: str) -> str:
+    """Generates a direct WhatsApp Click-to-Chat URL."""
+    clean_num = re.sub(r"\D", "", clean_phone_number(to_number))
+    encoded_text = urllib.parse.quote(text)
+    if clean_num:
+        return f"https://wa.me/{clean_num}?text={encoded_text}"
+    return f"https://api.whatsapp.com/send?text={encoded_text}"
+
+def generate_mailto_url(to_address: str, subject: str, body: str) -> str:
+    """Generates a direct mailto URL."""
+    enc_subject = urllib.parse.quote(subject)
+    enc_body = urllib.parse.quote(body)
+    return f"mailto:{to_address}?subject={enc_subject}&body={enc_body}"
+
+def send_whatsapp(
+    to_number: str,
+    user_name: str,
+    summary: str,
+    account_sid: str,
+    auth_token: str,
+    from_number: str,
+    content_sid: str = "",
+) -> tuple[bool, str]:
     """
     Sends an expense summary to a WhatsApp number via Twilio.
     Supports Twilio Content Template SID (business-initiated) or direct body text.
     """
     if not account_sid or not auth_token:
-        return False, "Twilio Account SID and Auth Token are required in secrets."
+        return False, "Twilio Account SID and Auth Token are required in secrets.toml."
     
+    clean_to = clean_phone_number(to_number)
+    if not clean_to or len(clean_to) < 8:
+        return False, f"Invalid destination phone number: '{to_number}'. Include country code (e.g. +91XXXXXXXXXX)."
+
     try:
         from twilio.rest import Client as TwilioClient
-        client = TwilioClient(account_sid, auth_token)
+        client = TwilioClient(account_sid.strip(), auth_token.strip())
         
-        # Ensure recipient is prefixed with whatsapp:
-        formatted_to = to_number.strip()
-        if not formatted_to.startswith("whatsapp:"):
-            formatted_to = f"whatsapp:{formatted_to}"
-            
+        formatted_to = f"whatsapp:{clean_to}" if not clean_to.startswith("whatsapp:") else clean_to
         formatted_from = from_number.strip()
         if not formatted_from.startswith("whatsapp:"):
             formatted_from = f"whatsapp:{formatted_from}"
 
-        if content_sid:
-            content_variables = json.dumps(
-                {"1": user_name, "2": clean_whatsapp_text(summary)},
-                ensure_ascii=False
-            )
-            message = client.messages.create(
-                from_=formatted_from,
-                to=formatted_to,
-                content_sid=content_sid,
-                content_variables=content_variables,
-            )
-        else:
-            # Fallback direct message (works in active 24h conversation sandbox)
-            body_text = f"🧾 Hi {user_name}! Here is your ReceiptWise expense summary:\n\n{summary}"
-            message = client.messages.create(
-                from_=formatted_from,
-                to=formatted_to,
-                body=body_text[:1600],
-            )
-        return True, message.sid
-    except Exception as error:
-        return False, str(error)
+        # 1. Try sending with Content Template SID if provided
+        if content_sid and content_sid.strip():
+            try:
+                content_variables = json.dumps(
+                    {"1": user_name, "2": clean_whatsapp_text(summary)},
+                    ensure_ascii=False,
+                )
+                message = client.messages.create(
+                    from_=formatted_from,
+                    to=formatted_to,
+                    content_sid=content_sid.strip(),
+                    content_variables=content_variables,
+                )
+                return True, f"Message queued via Twilio Template (SID: {message.sid})"
+            except Exception as template_err:
+                err_str = str(template_err)
+                # If Content Template fails on a trial account or requires body, try direct body fallback
+                if "401" in err_str or "Trial account" in err_str or "400" in err_str:
+                    pass
+                else:
+                    raise template_err
 
-def send_email(to_address: str, subject: str, body: str, gmail_address: str, app_password: str) -> tuple[bool, str]:
+        # 2. Direct body message (standard for joined sandbox sessions)
+        body_text = f"🧾 Hi {user_name}! Here is your ReceiptWise expense summary:\n\n{summary}"
+        message = client.messages.create(
+            from_=formatted_from,
+            to=formatted_to,
+            body=body_text[:1600],
+        )
+        return True, f"Message sent via Twilio (SID: {message.sid})"
+
+    except Exception as error:
+        err_msg = str(error)
+        if "422" in err_msg or "verified recipient" in err_msg:
+            return False, (
+                f"Twilio Trial Restriction: The recipient {clean_to} is not verified in your Twilio Console. "
+                "Twilio trial accounts require either: "
+                "(1) Adding this number under Twilio Console > Phone Numbers > Manage > Verified Caller IDs, or "
+                "(2) Sending your sandbox join message (e.g. 'join <code>') from WhatsApp to +1 415 523 8886."
+            )
+        if "400" in err_msg and "ContentSid Required" in err_msg:
+            return False, "Twilio ContentSid is required for this WhatsApp sender. Please check TWILIO_CONTENT_SID."
+        return False, f"Twilio WhatsApp error: {err_msg}"
+
+def send_email(
+    to_address: str,
+    subject: str,
+    body: str,
+    gmail_address: str,
+    app_password: str,
+) -> tuple[bool, str]:
     """
     Sends an expense report email via Gmail SMTP (Option B in workshop guide).
     Uses a Google App Password for free, third-party-free delivery.
     Supports both SSL (port 465) and STARTTLS (port 587).
     """
     if not gmail_address or not app_password:
-        return False, "Gmail address and App Password must be configured in secrets."
+        return False, "Gmail address and App Password must be configured in secrets.toml."
     if not to_address or "@" not in to_address or "\n" in to_address:
         return False, "Invalid recipient email address."
 
     cleaned_password = app_password.replace(" ", "").strip()
     
+    # Check for common mistake: regular account password instead of 16-char app password
+    if len(cleaned_password) != 16 or any(c in cleaned_password for c in "@!#$%^&*()"):
+        warning_hint = (
+            " (Note: Google requires a 16-character App Password generated at "
+            "https://myaccount.google.com/apppasswords, not your personal Gmail password)."
+        )
+    else:
+        warning_hint = ""
+
     message = MIMEText(body, "plain", "utf-8")
     message["Subject"] = subject
     message["From"] = gmail_address.strip()
@@ -88,5 +155,4 @@ def send_email(to_address: str, subject: str, body: str, gmail_address: str, app
                 server.send_message(message)
             return True, "Email sent successfully via TLS (port 587)"
         except Exception as tls_err:
-            return False, f"SMTP connection failed: {tls_err} (Note: local ISP/firewalls may block outbound SMTP; this will work when deployed to Streamlit Cloud)"
-
+            return False, f"SMTP Authentication/Connection failed: {tls_err}{warning_hint}"

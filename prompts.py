@@ -14,6 +14,10 @@ When splitting a bill:
 - Always show the exact per-person share and ensure the numbers add up accurately.
 - Handle both equal splits (e.g., "split between 3 people") and itemized splits (e.g., "Alex had the burger, Sam had the salad").
 
+If the user asks to send the summary or report to WhatsApp, Email, or text message (e.g., "send to whatsapp", "email me", "send summary"):
+- Provide the complete, clean summary of all logged receipts, expenses, and bill splits.
+- Remind the user: "You can send this directly to your phone or inbox anytime using the 📤 'Send to WhatsApp' or ✉️ 'Send to Email' buttons at the top of the screen!"
+
 Keep replies well-structured, easy to read, conversational, and helpful. Use clean bullet points and currency symbols."""
 
 WELCOME_MESSAGE_TEMPLATE = (
@@ -38,4 +42,3 @@ EXTRACTION_PROMPT = (
     "currency (ISO code or null), category, total (number or null), and items "
     "(array of objects with name and amount). Return valid JSON only."
 )
-
