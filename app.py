@@ -104,7 +104,7 @@ def get_secret(key: str, default: str = "") -> str:
 
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
-MODEL_NAME = get_secret("GEMINI_MODEL", "gemini-3.5-flash")
+MODEL_NAME = get_secret("GEMINI_MODEL", "gemini-flash-latest")
 GMAIL_ADDRESS = get_secret("GMAIL_ADDRESS")
 GMAIL_CLIENT_ID = get_secret("GMAIL_CLIENT_ID")
 GMAIL_CLIENT_SECRET = get_secret("GMAIL_CLIENT_SECRET")
@@ -247,18 +247,58 @@ else:
         st.session_state.messages.append({"role": role, "kind": kind, "content": content})
         render_message(st.session_state.messages[-1])
 
+    candidate_models = [MODEL_NAME, "gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash-lite"]
+    unique_models = []
+    for m in candidate_models:
+        if m and m not in unique_models:
+            unique_models.append(m)
+
     def ask_gemini(parts) -> str:
-        """Sends prompt parts (text / images) to the persistent Gemini chat session."""
-        try:
-            if "chat" not in st.session_state or st.session_state.chat is None:
-                st.session_state.chat = gemini_client.chats.create(
-                    model=MODEL_NAME,
-                    config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
-                )
-            response = st.session_state.chat.send_message(parts)
-            return response.text or "No response generated."
-        except Exception as error:
-            return f"Sorry, something went wrong: {error}"
+        """Sends prompt parts (text / images) to Gemini with automatic multi-model failover."""
+        if not gemini_client:
+            return "Gemini API key is not configured. Please add GEMINI_API_KEY in secrets.toml."
+
+        last_error = None
+        for candidate_model in unique_models:
+            try:
+                if (
+                    "chat" not in st.session_state
+                    or st.session_state.chat is None
+                    or getattr(st.session_state, "chat_model", None) != candidate_model
+                ):
+                    st.session_state.chat = gemini_client.chats.create(
+                        model=candidate_model,
+                        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+                    )
+                    st.session_state.chat_model = candidate_model
+
+                response = st.session_state.chat.send_message(parts)
+                if response and response.text:
+                    return response.text
+            except Exception as error:
+                last_error = error
+                err_str = str(error)
+                # If model is unavailable (404) or quota exhausted (429), fall through to next candidate model
+                if "429" in err_str or "404" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    st.session_state.chat = None
+                    continue
+                else:
+                    break
+
+        # Fallback summary if AI quotas are temporarily exhausted
+        chat_history = [
+            m["content"] for m in st.session_state.get("messages", [])
+            if m.get("role") == "user" or (m.get("role") == "assistant" and "RESOURCE_EXHAUSTED" not in m.get("content", ""))
+        ]
+        if chat_history:
+            recent_items = "\n".join(f"• {msg}" for msg in chat_history[-5:])
+            return (
+                f"🧾 Expense Log Summary for {user_name} ({user_curr}):\n\n"
+                f"{recent_items}\n\n"
+                f"(Note: Auto-compiled from logged entries while Gemini free-tier quota resets)."
+            )
+
+        return f"Gemini API rate limit reached. Please retry in a few moments or switch GEMINI_MODEL in secrets.toml ({last_error})."
 
     # --------------------------------------------------------------------------
     # 6. Sidebar Controls & Quick Tools
