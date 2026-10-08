@@ -43,6 +43,13 @@ st.markdown(
     }
     .hero-banner h1 { margin: 0; font-size: 2.1rem; color: #f8fafc; font-weight: 700; }
     .hero-banner p { margin: 0.4rem 0 0; color: #94a3b8; font-size: 1.05rem; }
+    .action-card {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 1rem 1.2rem;
+        margin-bottom: 1rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -105,20 +112,29 @@ if "onboarded" not in st.session_state:
     st.subheader("Welcome! Set up your expense tracker")
 
     with st.form("onboarding_form"):
-        name = st.text_input("Your Name", placeholder="e.g. Alex")
+        name = st.text_input("Your Name", placeholder="e.g. Rohit")
+
+        delivery_option = st.radio(
+            "Where would you like to receive your expense breakdowns?",
+            ["📱 WhatsApp (Direct message to your phone)", "✉️ Email (Gmail report)", "Both WhatsApp & Email"],
+            index=0,
+            help="Choose how you prefer to receive summaries.",
+        )
 
         c1, c2 = st.columns(2)
         with c1:
             whatsapp_input = st.text_input(
                 "WhatsApp Number (with country code)",
+                value="+919309280705",
                 placeholder="+91XXXXXXXXXX",
-                help="Enter the WhatsApp number where you want to receive summaries.",
+                help="Your WhatsApp number for expense summaries and bill splits.",
             )
         with c2:
             email_input = st.text_input(
                 "Email Address",
+                value="grohit6156@gmail.com",
                 placeholder="you@example.com",
-                help="Enter the email address where you want reports delivered.",
+                help="Your email address for expense reports.",
             )
 
         currency_choice = st.selectbox(
@@ -145,7 +161,7 @@ if "onboarded" not in st.session_state:
             if not name.strip():
                 st.warning("Please enter your name.")
             elif not whatsapp_input.strip() and not email_input.strip():
-                st.warning("Please provide at least a WhatsApp number or an Email address.")
+                st.warning("Please enter at least a WhatsApp number or an Email address.")
             elif not key_to_use:
                 st.error("Please provide a Gemini API Key (or configure GEMINI_API_KEY in .streamlit/secrets.toml).")
             else:
@@ -156,6 +172,7 @@ if "onboarded" not in st.session_state:
                 st.session_state.name = name.strip()
                 st.session_state.whatsapp_number = clean_phone_number(whatsapp_input)
                 st.session_state.email_address = email_input.strip()
+                st.session_state.delivery_option = delivery_option
                 st.session_state.currency = currency_choice
 
                 # Initialize Gemini chat session with SYSTEM_PROMPT memory
@@ -214,7 +231,7 @@ else:
         st.title("🧾 ReceiptWise")
         st.markdown(f"👤 **{user_name}**")
 
-        # Destination editors
+        st.subheader("📱 Destination Settings")
         new_wa = st.text_input("WhatsApp Number", value=user_wa, placeholder="+91XXXXXXXXXX")
         if new_wa != user_wa:
             st.session_state.whatsapp_number = clean_phone_number(new_wa)
@@ -271,80 +288,97 @@ else:
             st.rerun()
 
     # --------------------------------------------------------------------------
-    # 7. Step 8 — Main Header & Dual Action Buttons
+    # 7. Main Header & Unmissable Action Buttons (ALWAYS ENABLED)
     # --------------------------------------------------------------------------
-    header_col, btn_wa_col, btn_email_col = st.columns([5, 2.2, 2], vertical_alignment="center")
+    header_col, btn_wa_col, btn_email_col = st.columns([4.5, 2.5, 2], vertical_alignment="center")
 
     with header_col:
         st.title("🧾 ReceiptWise")
         st.caption(
-            f"Logged in as **{user_name}** · Deliver to: WhatsApp: `{user_wa or 'Not set'}` | Email: `{user_email or 'Not set'}`"
+            f"Logged in as **{user_name}** · Deliver to: 📱 WhatsApp: `{user_wa or 'Not set'}` | ✉️ Email: `{user_email or 'Not set'}`"
         )
-
-    send_disabled = len(st.session_state.get("messages", [])) <= 1
 
     summary_generated = None
 
+    # WHATSAPP BUTTON (Always Enabled & Clearly Visible)
     with btn_wa_col:
-        if st.button("📤 Send to WhatsApp", disabled=send_disabled or not bool(user_wa), use_container_width=True, type="primary"):
-            with st.spinner("Generating summary & dispatching to WhatsApp..."):
-                summary_text = ask_gemini([SUMMARY_REQUEST_PROMPT])
-                summary_generated = summary_text
-                success, info = send_whatsapp(
-                    to_number=user_wa,
-                    user_name=user_name,
-                    summary=summary_text,
-                    account_sid=TWILIO_ACCOUNT_SID,
-                    auth_token=TWILIO_AUTH_TOKEN,
-                    from_number=TWILIO_WHATSAPP_FROM,
-                    content_sid=TWILIO_CONTENT_SID,
-                )
-                if success:
-                    st.success(f"✅ {info}")
-                else:
-                    st.warning(f"⚠️ {info}")
-                    wa_url = generate_whatsapp_web_url(user_wa, summary_text)
-                    st.link_button("💬 Open in WhatsApp Web / App", wa_url, type="primary", use_container_width=True)
+        wa_btn_label = "📱 Send to WhatsApp"
+        if st.button(wa_btn_label, type="primary", use_container_width=True):
+            if len(st.session_state.get("messages", [])) <= 1:
+                st.info("💡 No expenses logged yet! Type an expense or upload a receipt photo below, then click here to send the WhatsApp summary.")
+            elif not user_wa:
+                st.warning("⚠️ Please enter a WhatsApp number in the sidebar.")
+            else:
+                with st.spinner("Preparing summary and sending to WhatsApp..."):
+                    summary_text = ask_gemini([SUMMARY_REQUEST_PROMPT])
+                    summary_generated = summary_text
+                    success, info = send_whatsapp(
+                        to_number=user_wa,
+                        user_name=user_name,
+                        summary=summary_text,
+                        account_sid=TWILIO_ACCOUNT_SID,
+                        auth_token=TWILIO_AUTH_TOKEN,
+                        from_number=TWILIO_WHATSAPP_FROM,
+                        content_sid=TWILIO_CONTENT_SID,
+                    )
+                    if success:
+                        st.success(f"✅ {info}")
+                    else:
+                        st.warning(f"⚠️ {info}")
 
+                    # Always provide a 1-click WhatsApp Click-to-Chat button
+                    wa_url = generate_whatsapp_web_url(user_wa, summary_text)
+                    st.link_button("💬 Open & Share in WhatsApp Directly", wa_url, use_container_width=True)
+
+    # EMAIL BUTTON (Always Enabled)
     with btn_email_col:
-        if st.button("✉️ Send to Email", disabled=send_disabled or not bool(user_email), use_container_width=True):
-            with st.spinner("Generating summary & emailing..."):
-                summary_text = ask_gemini([SUMMARY_REQUEST_PROMPT])
-                summary_generated = summary_text
-                success, info = send_email(
-                    to_address=user_email,
-                    subject=f"ReceiptWise Expense Summary for {user_name}",
-                    body=summary_text,
-                    gmail_address=GMAIL_ADDRESS,
-                    app_password=GMAIL_APP_PASSWORD,
-                )
-                if success:
-                    st.success(f"✅ {info}")
-                else:
-                    st.warning(f"⚠️ {info}")
-                    mailto_url = generate_mailto_url(user_email, f"ReceiptWise Expense Summary for {user_name}", summary_text)
-                    st.link_button("✉️ Open in Email Client", mailto_url, use_container_width=True)
+        if st.button("✉️ Send to Email", use_container_width=True):
+            if len(st.session_state.get("messages", [])) <= 1:
+                st.info("💡 No expenses logged yet! Log an expense or receipt below first.")
+            elif not user_email:
+                st.warning("⚠️ Please enter an email address in the sidebar.")
+            else:
+                with st.spinner("Preparing summary and sending email..."):
+                    summary_text = ask_gemini([SUMMARY_REQUEST_PROMPT])
+                    summary_generated = summary_text
+                    success, info = send_email(
+                        to_address=user_email,
+                        subject=f"ReceiptWise Expense Summary for {user_name}",
+                        body=summary_text,
+                        gmail_address=GMAIL_ADDRESS,
+                        app_password=GMAIL_APP_PASSWORD,
+                    )
+                    if success:
+                        st.success(f"✅ {info}")
+                    else:
+                        st.warning(f"⚠️ {info}")
+                        mailto_url = generate_mailto_url(user_email, f"ReceiptWise Expense Summary for {user_name}", summary_text)
+                        st.link_button("✉️ Open in Email Client", mailto_url, use_container_width=True)
 
     if summary_generated:
         with st.expander("📋 View Generated Expense Summary", expanded=True):
             st.text(summary_generated)
-            st.download_button(
-                "⬇️ Download Summary as Text",
-                data=summary_generated,
-                file_name="expense_summary.txt",
-                mime="text/plain",
-            )
+            c_copy1, c_copy2 = st.columns(2)
+            with c_copy1:
+                wa_share = generate_whatsapp_web_url(user_wa, summary_generated)
+                st.link_button("💬 Send to WhatsApp Now", wa_share, use_container_width=True)
+            with c_copy2:
+                st.download_button(
+                    "⬇️ Download Summary as Text",
+                    data=summary_generated,
+                    file_name="expense_summary.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
 
     # --------------------------------------------------------------------------
     # 8. Step 6 — Render Chat History & Welcome Message
     # --------------------------------------------------------------------------
-    target_channel_desc = "WhatsApp or Email"
-
     if not st.session_state.messages:
         welcome_text = WELCOME_MESSAGE_TEMPLATE.format(
             name=user_name,
-            button_label="Send to WhatsApp / Email",
-            channel=target_channel_desc,
+            button_label="Send to WhatsApp",
+            channel="WhatsApp",
         )
         add_message("assistant", "text", welcome_text)
     else:
@@ -437,9 +471,12 @@ else:
             answer = ask_gemini(parts)
             add_message("assistant", "text", answer)
 
-        # Detect if user asked to send via WhatsApp or Email in their text prompt
-        lowered_prompt = active_prompt_text.lower()
-        if any(w in lowered_prompt for w in ["send to whatsapp", "send on whatsapp", "share on whatsapp"]):
-            st.info("💡 You can send this summary immediately using the **📤 Send to WhatsApp** button in the header!")
-        elif any(w in lowered_prompt for w in ["send to email", "email me", "send email"]):
-            st.info("💡 You can email this report immediately using the **✉️ Send to Email** button in the header!")
+        # Show prominent WhatsApp and Email action triggers right below the response
+        st.markdown(
+            """
+            <div style="background: rgba(37, 211, 102, 0.1); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 8px; padding: 0.6rem 1rem; margin-top: 0.5rem;">
+                <b>📱 Ready to share?</b> Click <b>📱 Send to WhatsApp</b> at the top of your screen to deliver this breakdown straight to your phone!
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
