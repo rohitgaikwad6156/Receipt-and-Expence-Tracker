@@ -8,11 +8,13 @@ from google.genai import types
 from finance import CURRENCIES, money, split_equal
 from notify import (
     clean_phone_number,
+    generate_gmail_web_url,
     generate_mailto_url,
     generate_whatsapp_web_url,
     send_email,
     send_whatsapp,
 )
+
 from prompts import (
     SUMMARY_REQUEST_PROMPT,
     SYSTEM_PROMPT,
@@ -352,24 +354,30 @@ else:
                         st.success(f"✅ {info}")
                     else:
                         st.warning(f"⚠️ {info}")
+                        gmail_url = generate_gmail_web_url(user_email, f"ReceiptWise Expense Summary for {user_name}", summary_text)
+                        st.link_button("📧 Open in Gmail Web (1-Click Send)", gmail_url, type="primary", use_container_width=True)
                         mailto_url = generate_mailto_url(user_email, f"ReceiptWise Expense Summary for {user_name}", summary_text)
-                        st.link_button("✉️ Open in Email Client", mailto_url, use_container_width=True)
+                        st.link_button("✉️ Open in Default Mail App", mailto_url, use_container_width=True)
 
     if summary_generated:
         with st.expander("📋 View Generated Expense Summary", expanded=True):
             st.text(summary_generated)
-            c_copy1, c_copy2 = st.columns(2)
+            c_copy1, c_copy2, c_copy3 = st.columns(3)
             with c_copy1:
                 wa_share = generate_whatsapp_web_url(user_wa, summary_generated)
-                st.link_button("💬 Send to WhatsApp Now", wa_share, use_container_width=True)
+                st.link_button("💬 Share in WhatsApp", wa_share, use_container_width=True)
             with c_copy2:
+                gmail_share = generate_gmail_web_url(user_email, f"ReceiptWise Expense Summary for {user_name}", summary_generated)
+                st.link_button("📧 Send via Gmail Web", gmail_share, use_container_width=True)
+            with c_copy3:
                 st.download_button(
-                    "⬇️ Download Summary as Text",
+                    "⬇️ Download as Text",
                     data=summary_generated,
                     file_name="expense_summary.txt",
                     mime="text/plain",
                     use_container_width=True,
                 )
+
 
     # --------------------------------------------------------------------------
     # 8. Step 6 — Render Chat History & Welcome Message

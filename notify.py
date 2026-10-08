@@ -32,6 +32,14 @@ def generate_mailto_url(to_address: str, subject: str, body: str) -> str:
     enc_body = urllib.parse.quote(body)
     return f"mailto:{to_address}?subject={enc_subject}&body={enc_body}"
 
+def generate_gmail_web_url(to_address: str, subject: str, body: str) -> str:
+    """Generates a direct Gmail Web Compose URL (opens Gmail with recipient, subject, and body pre-filled)."""
+    enc_to = urllib.parse.quote(to_address)
+    enc_su = urllib.parse.quote(subject)
+    enc_body = urllib.parse.quote(body)
+    return f"https://mail.google.com/mail/?view=cm&fs=1&to={enc_to}&su={enc_su}&body={enc_body}"
+
+
 def send_whatsapp(
     to_number: str,
     user_name: str,
@@ -138,16 +146,16 @@ def send_email(
     message["From"] = gmail_address.strip()
     message["To"] = to_address.strip()
 
-    # Try port 465 (SSL) first
+    # Try port 465 (SSL) first with quick timeout
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=3) as server:
             server.login(gmail_address.strip(), cleaned_password)
             server.send_message(message)
         return True, "Email sent successfully via SSL (port 465)"
     except Exception as ssl_err:
         # Fallback to port 587 (STARTTLS)
         try:
-            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=3) as server:
                 server.ehlo()
                 server.starttls()
                 server.ehlo()
@@ -155,4 +163,5 @@ def send_email(
                 server.send_message(message)
             return True, "Email sent successfully via TLS (port 587)"
         except Exception as tls_err:
-            return False, f"SMTP Authentication/Connection failed: {tls_err}{warning_hint}"
+            return False, f"SMTP Error: {tls_err}{warning_hint}. Local Wi-Fi/ISP blocks SMTP ports 465/587. Click '📧 Open in Gmail Web' below to send instantly via browser!"
+
