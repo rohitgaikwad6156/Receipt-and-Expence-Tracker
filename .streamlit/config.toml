@@ -4,3 +4,6 @@ backgroundColor = "#0e1424"
 secondaryBackgroundColor = "#171f34"
 textColor = "#f3f6fc"
 font = "sans serif"
+
+[client]
+showErrorDetails = "full"

@@ -1,19 +1,50 @@
+import importlib
 import io
 import os
+from pathlib import Path
 import re
+import sys
 import streamlit as st
 from google import genai
 from google.genai import types
 
+# Ensure app root directory is at the front of sys.path on Streamlit Cloud & Render
+_APP_DIR = str(Path(__file__).resolve().parent)
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+elif sys.path[0] != _APP_DIR:
+    sys.path.remove(_APP_DIR)
+    sys.path.insert(0, _APP_DIR)
+
 from finance import CURRENCIES, money, split_equal
-from notify import (
-    clean_phone_number,
-    generate_gmail_web_url,
-    generate_mailto_url,
-    generate_whatsapp_web_url,
-    send_email,
-    send_whatsapp,
-)
+
+try:
+    from notify import (
+        clean_phone_number,
+        generate_gmail_web_url,
+        generate_mailto_url,
+        generate_whatsapp_web_url,
+        is_gmail_api_configured,
+        send_email,
+        send_whatsapp,
+    )
+except ImportError:
+    # If Streamlit Cloud hot-reload holds a stale cached bytecode or shadowed module, force reload
+    if "notify" in sys.modules:
+        import notify
+        importlib.reload(notify)
+        from notify import (
+            clean_phone_number,
+            generate_gmail_web_url,
+            generate_mailto_url,
+            generate_whatsapp_web_url,
+            is_gmail_api_configured,
+            send_email,
+            send_whatsapp,
+        )
+    else:
+        raise
+
 
 from prompts import (
     SUMMARY_REQUEST_PROMPT,
@@ -75,11 +106,14 @@ def get_secret(key: str, default: str = "") -> str:
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
 MODEL_NAME = get_secret("GEMINI_MODEL", "gemini-3.5-flash")
 GMAIL_ADDRESS = get_secret("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = get_secret("GMAIL_APP_PASSWORD")
+GMAIL_CLIENT_ID = get_secret("GMAIL_CLIENT_ID")
+GMAIL_CLIENT_SECRET = get_secret("GMAIL_CLIENT_SECRET")
+GMAIL_REFRESH_TOKEN = get_secret("GMAIL_REFRESH_TOKEN")
 TWILIO_ACCOUNT_SID = get_secret("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = get_secret("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_FROM = get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 TWILIO_CONTENT_SID = get_secret("TWILIO_CONTENT_SID")
+
 
 
 # ------------------------------------------------------------------------------
@@ -250,8 +284,9 @@ else:
 
         st.subheader("Service Status")
         st.write("🟢 Gemini AI Vision & Chat" if active_api_key else "⚪ Gemini (No key)")
-        email_ready = bool(GMAIL_ADDRESS and GMAIL_APP_PASSWORD)
-        st.write("🟢 Gmail SMTP Configured" if email_ready else "⚪ Gmail (Needs secrets.toml)")
+        gmail_ready = is_gmail_api_configured()
+        st.write("🟢 Gmail API Active (OAuth 2.0)" if gmail_ready else "⚪ Gmail API (Needs OAuth setup)")
+
         wa_ready = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN)
         st.write("🟢 Twilio WhatsApp Configured" if wa_ready else "⚪ Twilio (Needs secrets.toml)")
 
@@ -347,9 +382,12 @@ else:
                         to_address=user_email,
                         subject=f"ReceiptWise Expense Summary for {user_name}",
                         body=summary_text,
-                        gmail_address=GMAIL_ADDRESS,
-                        app_password=GMAIL_APP_PASSWORD,
+                        sender_address=GMAIL_ADDRESS,
+                        client_id=GMAIL_CLIENT_ID,
+                        client_secret=GMAIL_CLIENT_SECRET,
+                        refresh_token=GMAIL_REFRESH_TOKEN,
                     )
+
                     if success:
                         st.success(f"✅ {info}")
                     else:

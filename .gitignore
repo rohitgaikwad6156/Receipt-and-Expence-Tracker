@@ -1,4 +1,7 @@
 .streamlit/secrets.toml
+credentials.json
+gmail_token.json
+token.json
 .env
 .env.*
 !.env.example
