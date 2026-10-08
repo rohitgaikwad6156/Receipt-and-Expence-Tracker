@@ -117,13 +117,28 @@ python -m unittest discover -s tests -v
 
 ---
 
-## ☁️ Deploying to Streamlit Community Cloud
+## ☁️ Deployment Guides
 
-1. Push your repository to GitHub (ensure `.streamlit/secrets.toml` is not committed).
-2. Visit [share.streamlit.io](https://share.streamlit.io) and log in with your GitHub account.
-3. Click **"New app"**, select your repository, branch (`main`), and set the main file path to `app.py`.
-4. In the app settings under **Settings → Secrets**, paste the contents of your `.streamlit/secrets.toml`.
-5. Click **Deploy**. Your live app URL will be generated!
+### Option 1: Streamlit Community Cloud (Recommended by Workshop Guide)
+1. Visit [share.streamlit.io](https://share.streamlit.io) and log in with your GitHub account.
+2. Click **"New app"**, select `rohitgaikwad6156/Receipt-and-Expence-Tracker`, branch `main`, entry point `app.py`.
+3. In **Settings → Secrets**, paste the contents of your `.streamlit/secrets.toml`.
+4. Click **Deploy**.
+
+### Option 2: Render (Free Web Service)
+1. Sign up / Log in to [render.com](https://render.com).
+2. Click **New +** → **Web Service** and connect this repository (`Receipt-and-Expence-Tracker`).
+3. Set the configuration:
+   - **Environment**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true`
+4. Under **Environment Variables**, add:
+   - `GEMINI_API_KEY`: your Gemini API key
+   - `GEMINI_MODEL`: `gemini-3.5-flash`
+   - `GMAIL_ADDRESS`: your Gmail address
+   - `GMAIL_APP_PASSWORD`: your 16-character Google App Password
+   - *(Optional)* `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `TWILIO_CONTENT_SID`
+5. Click **Create Web Service**. Render will build and deploy your live Streamlit app.
 
 ---
 
