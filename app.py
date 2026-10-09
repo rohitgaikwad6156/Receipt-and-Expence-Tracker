@@ -17,6 +17,7 @@ elif sys.path[0] != _APP_DIR:
     sys.path.insert(0, _APP_DIR)
 
 from finance import CURRENCIES, money, split_equal
+from receipt_images import read_receipt_image, receipt_analysis_prompt
 
 try:
     from notify import (
@@ -472,33 +473,77 @@ else:
             render_message(message)
 
     # --------------------------------------------------------------------------
-    # 9. Prominent Image Uploader & Quick Prompts
+    # 9. Camera Capture, Image Upload & Quick Prompts
     # --------------------------------------------------------------------------
-    with st.expander("📎 Upload Receipt Photo directly (or drag into chat bar below)", expanded=False):
-        up_col1, up_col2 = st.columns([3, 1])
-        with up_col1:
-            direct_photo = st.file_uploader(
-                "Upload a photo of your receipt or bill",
-                type=["jpg", "jpeg", "png", "webp"],
-                key="prominent_photo_uploader",
-            )
-        with up_col2:
-            split_note = st.text_input("Split notes (optional)", placeholder="e.g. Split with 3 friends", key="direct_split_notes")
-            analyze_clicked = st.button("✨ Analyze Receipt Photo", disabled=direct_photo is None, use_container_width=True, type="primary")
+    st.subheader("📸 Scan a Receipt")
+    st.caption(
+        "Take a photo using your phone or laptop camera, or upload an existing "
+        "JPG, PNG or WebP image. Make sure the whole receipt is clear and readable."
+    )
+    split_note = st.text_input(
+        "Split instructions (optional)",
+        placeholder="e.g. Split this receipt equally between 3 friends",
+        key="direct_split_notes",
+    )
 
-        if analyze_clicked and direct_photo is not None:
-            photo_bytes = direct_photo.getvalue()
+    camera_tab, upload_tab = st.tabs(["📷 Take Photo", "📁 Upload Receipt"])
+    with camera_tab:
+        camera_photo = st.camera_input(
+            "Allow camera access, then photograph your receipt",
+            key="receipt_camera_input",
+            help="A camera-enabled device and browser permission are required. "
+            "For mobile browsers, use an HTTPS app URL.",
+        )
+        analyze_camera = st.button(
+            "✨ Send Camera Photo to Gemini",
+            key="analyze_camera_receipt",
+            type="primary",
+            use_container_width=True,
+            disabled=camera_photo is None,
+        )
+
+    with upload_tab:
+        direct_photo = st.file_uploader(
+            "Choose a receipt image",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="prominent_photo_uploader",
+        )
+        analyze_upload = st.button(
+            "✨ Analyze Uploaded Receipt",
+            key="analyze_uploaded_receipt",
+            type="primary",
+            use_container_width=True,
+            disabled=direct_photo is None,
+        )
+
+    if analyze_camera or analyze_upload:
+        selected_photo = camera_photo if analyze_camera else direct_photo
+        try:
+            photo_bytes, photo_mime = read_receipt_image(selected_photo)
+        except ValueError as error:
+            st.error(str(error))
+        else:
+            # Keep camera and file uploads on one Gemini/chat-history path,
+            # so the resulting receipt is also available for email and WhatsApp summaries.
+            prompt = receipt_analysis_prompt(split_note)
+            caption = (
+                "Analyze the receipt I just photographed."
+                if analyze_camera
+                else "Analyze my uploaded receipt."
+            )
+            if split_note.strip():
+                caption += f" Split instructions: {split_note.strip()[:300]}"
+
+            with st.spinner("Uploading image and analyzing receipt with Gemini AI..."):
+                answer = ask_gemini([
+                    types.Part.from_bytes(data=photo_bytes, mime_type=photo_mime),
+                    prompt,
+                ])
+
             add_message("user", "image", photo_bytes)
-            user_caption = f"Analyze this receipt. {split_note}".strip()
-            add_message("user", "text", user_caption)
-            parts = [
-                types.Part.from_bytes(data=photo_bytes, mime_type=direct_photo.type),
-                user_caption + " Extract merchant, date, currency, itemized items with prices, tax, tip, and total. Categorize spending and compute the bill split.",
-            ]
-            with st.spinner("Analyzing receipt with Gemini..."):
-                answer = ask_gemini(parts)
-                add_message("assistant", "text", answer)
-                st.rerun()
+            add_message("user", "text", caption)
+            add_message("assistant", "text", answer)
+            st.rerun()
 
     # Quick suggestion chips
     st.markdown(
@@ -538,20 +583,19 @@ else:
         parts = []
 
         if active_photo is not None:
-            photo_bytes = active_photo.getvalue()
+            try:
+                photo_bytes, photo_mime = read_receipt_image(active_photo)
+            except ValueError as error:
+                st.error(str(error))
+                st.stop()
             add_message("user", "image", photo_bytes)
-            parts.append(types.Part.from_bytes(data=photo_bytes, mime_type=active_photo.type))
+            parts.append(types.Part.from_bytes(data=photo_bytes, mime_type=photo_mime))
 
         if active_prompt_text:
             add_message("user", "text", active_prompt_text)
             parts.append(active_prompt_text)
         elif active_photo is not None:
-            default_photo_prompt = (
-                "Read this receipt or bill. Extract the merchant name, date, currency, "
-                "an itemized list of all items with their prices, tax/tip, and the final total amount. "
-                "Categorize the expense, and offer to split the bill."
-            )
-            parts.append(default_photo_prompt)
+            parts.append(receipt_analysis_prompt())
 
         with st.spinner("Analyzing & calculating..."):
             answer = ask_gemini(parts)
