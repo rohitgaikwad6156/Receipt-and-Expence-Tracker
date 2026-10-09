@@ -8,7 +8,7 @@ Built for the **AI Vision ChatBot Workshop** following the *MacroSnap* architect
 
 ## 🌟 Features
 
-- **📸 Instant Receipt Vision Scanning**: Photograph or upload any receipt, bill, or invoice (`JPG`, `PNG`, `WebP`) directly in the chat input. Gemini extracts merchant names, purchase dates, itemized item prices, tax, tip, and grand totals.
+- **📸 In-App Camera Receipt Capture**: Use **Take Photo** to capture receipts with a phone or laptop camera (browser permission required), then tap **Send Camera Photo to Gemini**. Or upload a JPG, PNG or WebP receipt. Both paths validate the image (up to 10 MB) and show Gemini's itemized analysis in the chat.
 - **💬 Conversational Expense Assistant**: Ask natural-language follow-ups like *"Split this bill between 3 people"*, *"Who owes what if Alex had the pasta and Sam had the salad?"*, or *"How much did I spend on taxes?"*.
 - **👥 Smart Bill Splitting**: Automatically splits bills equally or by itemized order with mathematically exact cent/paise rounding.
 - **📤 One-Click Delivery**: Click **"Send to Email"** or **"Send to WhatsApp"** to get a clean, formatted expense summary sent straight to your inbox or phone.
