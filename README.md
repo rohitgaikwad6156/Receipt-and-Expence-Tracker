@@ -150,3 +150,15 @@ python -m unittest discover -s tests -v
 | **Prompt Design** | 20% | `SYSTEM_PROMPT` strictly scoped to receipts, expense tracking, currency, and fair bill-splitting, with guardrails against off-topic queries. |
 | **Code Quality** | 20% | Modularized files (`app.py`, `prompts.py`, `notify.py`, `finance.py`), cached Gemini connection, comprehensive unit tests, zero committed secrets. |
 | **Creativity & Polish**| 20% | Dark glassmorphic theme, quick prompt suggestions, offline bill split calculator, chat download, multi-channel support (Email & WhatsApp). |
+
+## Receipt capture safety and verification
+
+Receipt images must be single-frame JPEG/PNG/WebP, no larger than 10 MiB and
+20 megapixels, and must fully decode. Failed Gemini requests show an error and do
+not save an analysis or send a failed summary. Camera/upload photos remain selected
+for retry; failed chat attachments have a **Retry last request** button. Successful
+conversation turns are replayed when switching models, preserving receipt context.
+
+Run `python -m unittest discover -s tests -v` after installing `requirements.txt`.
+See [receipt verification](docs/receipt-verification.md) for the optional live API
+smoke test and the HTTPS camera/delivery checks required before merging.

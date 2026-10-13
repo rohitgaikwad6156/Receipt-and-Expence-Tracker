@@ -75,5 +75,50 @@ class ReceiptImageTests(unittest.TestCase):
         self.assertIn("x" * 300, prompt)
 
 
+
+
+class ReceiptDecodingTests(unittest.TestCase):
+    def test_damaged_png_checksum_is_a_friendly_validation_error(self):
+        data = bytearray(make_image("PNG"))
+        data[data.index(b"IDAT") + 5] ^= 1
+        with self.assertRaisesRegex(ValueError, "could not be opened"):
+            read_receipt_image(FakeUpload(bytes(data)))
+
+    def test_truncated_images_are_rejected(self):
+        for fmt in ("JPEG", "PNG", "WEBP"):
+            with self.subTest(format=fmt):
+                buf = io.BytesIO()
+                Image.new("RGB", (128, 128), "white").save(buf, fmt)
+                with self.assertRaises(ValueError):
+                    read_receipt_image(FakeUpload(buf.getvalue()[:-10]))
+
+    def test_byte_limit_boundary(self):
+        data = make_image("PNG")
+        padded = data + b"\0" * (MAX_RECEIPT_BYTES - len(data))
+        self.assertEqual(len(read_receipt_image(FakeUpload(padded))[0]), MAX_RECEIPT_BYTES)
+        with self.assertRaisesRegex(ValueError, "larger than 10 MB"):
+            read_receipt_image(FakeUpload(padded + b"\0"))
+
+    def test_pixel_limit_boundary(self):
+        from unittest.mock import patch
+        from receipt_images import MAX_RECEIPT_PIXELS
+        data = make_image("PNG")
+        with patch("receipt_images.MAX_RECEIPT_PIXELS", 256):
+            read_receipt_image(FakeUpload(data))
+        with patch("receipt_images.MAX_RECEIPT_PIXELS", 255):
+            with self.assertRaisesRegex(ValueError, "megapixels"):
+                read_receipt_image(FakeUpload(data))
+        self.assertEqual(MAX_RECEIPT_PIXELS, 20_000_000)
+
+    def test_unsupported_and_animated_images(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            read_receipt_image(FakeUpload(make_image("GIF")))
+        buf = io.BytesIO()
+        Image.new("RGB", (16, 16), "white").save(buf, "PNG", save_all=True,
+              append_images=[Image.new("RGB", (16, 16), "black")])
+        with self.assertRaisesRegex(ValueError, "Animated"):
+            read_receipt_image(FakeUpload(buf.getvalue()))
+
+
 if __name__ == "__main__":
     unittest.main()

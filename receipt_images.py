@@ -5,6 +5,7 @@ from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 
 MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+MAX_RECEIPT_PIXELS = 20_000_000
 SUPPORTED_FORMATS = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 
 
@@ -33,8 +34,15 @@ def read_receipt_image(uploaded_file) -> tuple[bytes, str]:
             mime_type = SUPPORTED_FORMATS.get(image.format)
             if mime_type is None:
                 raise ValueError("Unsupported image type. Use JPG, PNG, or WebP.")
+            if image.width * image.height > MAX_RECEIPT_PIXELS:
+                raise ValueError("The receipt image exceeds 20 megapixels. Use a smaller image.")
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError("Animated images are not supported. Use a single receipt photo.")
             image.verify()
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        # verify() checks structure but does not decode JPEG pixel data.
+        with Image.open(BytesIO(image_bytes)) as image:
+            image.load()
+    except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
         raise ValueError(
             "The image could not be opened. Retake the photo or upload a valid JPG, PNG, or WebP."
         ) from exc
