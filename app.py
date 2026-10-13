@@ -17,6 +17,7 @@ elif sys.path[0] != _APP_DIR:
     sys.path.insert(0, _APP_DIR)
 
 from finance import CURRENCIES, money, split_equal
+from receipt_service import analyze_receipt, generate_answer
 
 try:
     from notify import (
@@ -124,7 +125,7 @@ def get_gemini_client(api_key: str):
     """Builds and caches the Gemini client once per session."""
     if not api_key:
         return None
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=30_000))
 
 
 active_api_key = st.session_state.get("custom_api_key") or GEMINI_API_KEY
@@ -211,12 +212,9 @@ if "onboarded" not in st.session_state:
                 st.session_state.delivery_option = delivery_option
                 st.session_state.currency = currency_choice
 
-                # Initialize Gemini chat session with SYSTEM_PROMPT memory
+                # Initialize successful-turn history; API credentials are checked on the first request.
                 try:
-                    st.session_state.chat = gemini_client.chats.create(
-                        model=MODEL_NAME,
-                        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
-                    )
+                    st.session_state.gemini_history = []
                     st.session_state.messages = []
                     st.session_state.onboarded = True
                     st.rerun()
@@ -247,58 +245,18 @@ else:
         st.session_state.messages.append({"role": role, "kind": kind, "content": content})
         render_message(st.session_state.messages[-1])
 
-    candidate_models = [MODEL_NAME, "gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash-lite"]
-    unique_models = []
-    for m in candidate_models:
-        if m and m not in unique_models:
-            unique_models.append(m)
+    candidate_models = list(dict.fromkeys([MODEL_NAME, "gemini-flash-latest", "gemini-2.5-flash-lite"]))
+    if "gemini_history" not in st.session_state:
+        st.session_state.gemini_history = []
 
     def ask_gemini(parts) -> str:
-        """Sends prompt parts (text / images) to Gemini with automatic multi-model failover."""
-        if not gemini_client:
-            return "Gemini API key is not configured. Please add GEMINI_API_KEY in secrets.toml."
-
-        last_error = None
-        for candidate_model in unique_models:
-            try:
-                if (
-                    "chat" not in st.session_state
-                    or st.session_state.chat is None
-                    or getattr(st.session_state, "chat_model", None) != candidate_model
-                ):
-                    st.session_state.chat = gemini_client.chats.create(
-                        model=candidate_model,
-                        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
-                    )
-                    st.session_state.chat_model = candidate_model
-
-                response = st.session_state.chat.send_message(parts)
-                if response and response.text:
-                    return response.text
-            except Exception as error:
-                last_error = error
-                err_str = str(error)
-                # If model is unavailable (404) or quota exhausted (429), fall through to next candidate model
-                if "429" in err_str or "404" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    st.session_state.chat = None
-                    continue
-                else:
-                    break
-
-        # Fallback summary if AI quotas are temporarily exhausted
-        chat_history = [
-            m["content"] for m in st.session_state.get("messages", [])
-            if m.get("role") == "user" or (m.get("role") == "assistant" and "RESOURCE_EXHAUSTED" not in m.get("content", ""))
-        ]
-        if chat_history:
-            recent_items = "\n".join(f"• {msg}" for msg in chat_history[-5:])
-            return (
-                f"🧾 Expense Log Summary for {user_name} ({user_curr}):\n\n"
-                f"{recent_items}\n\n"
-                f"(Note: Auto-compiled from logged entries while Gemini free-tier quota resets)."
-            )
-
-        return f"Gemini API rate limit reached. Please retry in a few moments or switch GEMINI_MODEL in secrets.toml ({last_error})."
+        result = generate_answer(
+            gemini_client, candidate_models, st.session_state.gemini_history, parts
+        )
+        if not result.ok:
+            st.error(result.error)
+            st.stop()  # In particular, never deliver a failed summary.
+        return result.text
 
     # --------------------------------------------------------------------------
     # 6. Sidebar Controls & Quick Tools
@@ -381,7 +339,7 @@ else:
     with btn_wa_col:
         wa_btn_label = "📱 Send to WhatsApp"
         if st.button(wa_btn_label, type="primary", use_container_width=True):
-            if len(st.session_state.get("messages", [])) <= 1:
+            if not st.session_state.gemini_history:
                 st.info("💡 No expenses logged yet! Type an expense or upload a receipt photo below, then click here to send the WhatsApp summary.")
             elif not user_wa:
                 st.warning("⚠️ Please enter a WhatsApp number in the sidebar.")
@@ -410,7 +368,7 @@ else:
     # EMAIL BUTTON (Always Enabled)
     with btn_email_col:
         if st.button("✉️ Send to Email", use_container_width=True):
-            if len(st.session_state.get("messages", [])) <= 1:
+            if not st.session_state.gemini_history:
                 st.info("💡 No expenses logged yet! Log an expense or receipt below first.")
             elif not user_email:
                 st.warning("⚠️ Please enter an email address in the sidebar.")
@@ -472,33 +430,62 @@ else:
             render_message(message)
 
     # --------------------------------------------------------------------------
-    # 9. Prominent Image Uploader & Quick Prompts
+    # 9. Camera Capture, Image Upload & Quick Prompts
     # --------------------------------------------------------------------------
-    with st.expander("📎 Upload Receipt Photo directly (or drag into chat bar below)", expanded=False):
-        up_col1, up_col2 = st.columns([3, 1])
-        with up_col1:
-            direct_photo = st.file_uploader(
-                "Upload a photo of your receipt or bill",
-                type=["jpg", "jpeg", "png", "webp"],
-                key="prominent_photo_uploader",
-            )
-        with up_col2:
-            split_note = st.text_input("Split notes (optional)", placeholder="e.g. Split with 3 friends", key="direct_split_notes")
-            analyze_clicked = st.button("✨ Analyze Receipt Photo", disabled=direct_photo is None, use_container_width=True, type="primary")
+    st.subheader("📸 Scan a Receipt")
+    st.caption(
+        "Take a photo using your phone or laptop camera, or upload an existing "
+        "JPG, PNG or WebP image. Make sure the whole receipt is clear and readable."
+    )
+    split_note = st.text_input(
+        "Split instructions (optional)",
+        placeholder="e.g. Split this receipt equally between 3 friends",
+        key="direct_split_notes",
+    )
 
-        if analyze_clicked and direct_photo is not None:
-            photo_bytes = direct_photo.getvalue()
-            add_message("user", "image", photo_bytes)
-            user_caption = f"Analyze this receipt. {split_note}".strip()
-            add_message("user", "text", user_caption)
-            parts = [
-                types.Part.from_bytes(data=photo_bytes, mime_type=direct_photo.type),
-                user_caption + " Extract merchant, date, currency, itemized items with prices, tax, tip, and total. Categorize spending and compute the bill split.",
-            ]
-            with st.spinner("Analyzing receipt with Gemini..."):
-                answer = ask_gemini(parts)
-                add_message("assistant", "text", answer)
-                st.rerun()
+    camera_tab, upload_tab = st.tabs(["📷 Take Photo", "📁 Upload Receipt"])
+    with camera_tab:
+        camera_photo = st.camera_input(
+            "Allow camera access, then photograph your receipt",
+            key="receipt_camera_input",
+            help="A camera-enabled device and browser permission are required. "
+            "For mobile browsers, use an HTTPS app URL.",
+        )
+        analyze_camera = st.button(
+            "✨ Send Camera Photo to Gemini",
+            key="analyze_camera_receipt",
+            type="primary",
+            use_container_width=True,
+            disabled=camera_photo is None,
+        )
+
+    with upload_tab:
+        direct_photo = st.file_uploader(
+            "Choose a receipt image",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="prominent_photo_uploader",
+        )
+        analyze_upload = st.button(
+            "✨ Analyze Uploaded Receipt",
+            key="analyze_uploaded_receipt",
+            type="primary",
+            use_container_width=True,
+            disabled=direct_photo is None,
+        )
+
+    if analyze_camera or analyze_upload:
+        selected_photo = camera_photo if analyze_camera else direct_photo
+        with st.spinner("Analyzing receipt with Gemini..."):
+            result = analyze_receipt(
+                gemini_client, candidate_models,
+                st.session_state.gemini_history, st.session_state.messages,
+                selected_photo, split_note, "camera" if analyze_camera else "upload",
+            )
+        if result.ok:
+            st.rerun()
+        else:
+            st.error(result.error)
+            st.caption("Your photo is still selected. Click Analyze again to retry.")
 
     # Quick suggestion chips
     st.markdown(
@@ -534,35 +521,42 @@ else:
     active_prompt_text = quick_prompt or (user_input.text if user_input else "")
     active_photo = user_input.files[0] if (user_input and user_input.files) else None
 
-    if user_input or quick_prompt:
-        parts = []
+    retry_pending = False
+    if st.session_state.get("pending_chat"):
+        if st.session_state.get("chat_error"):
+            st.error(st.session_state.chat_error)
+        st.caption("The previous request failed. You can retry it or submit a new request.")
+        retry_pending = st.button("Retry last request", key="retry_chat_request")
 
-        if active_photo is not None:
-            photo_bytes = active_photo.getvalue()
-            add_message("user", "image", photo_bytes)
-            parts.append(types.Part.from_bytes(data=photo_bytes, mime_type=active_photo.type))
-
-        if active_prompt_text:
-            add_message("user", "text", active_prompt_text)
-            parts.append(active_prompt_text)
-        elif active_photo is not None:
-            default_photo_prompt = (
-                "Read this receipt or bill. Extract the merchant name, date, currency, "
-                "an itemized list of all items with their prices, tax/tip, and the final total amount. "
-                "Categorize the expense, and offer to split the bill."
-            )
-            parts.append(default_photo_prompt)
+    if user_input or quick_prompt or retry_pending:
+        if retry_pending:
+            pending = st.session_state.pending_chat
+            active_prompt_text = pending["text"]
+            active_photo = pending["photo"]
+        else:
+            st.session_state.pending_chat = {"text": active_prompt_text, "photo": active_photo}
 
         with st.spinner("Analyzing & calculating..."):
-            answer = ask_gemini(parts)
-            add_message("assistant", "text", answer)
-
-        # Show prominent WhatsApp and Email action triggers right below the response
-        st.markdown(
-            """
-            <div style="background: rgba(37, 211, 102, 0.1); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 8px; padding: 0.6rem 1rem; margin-top: 0.5rem;">
-                <b>📱 Ready to share?</b> Click <b>📱 Send to WhatsApp</b> at the top of your screen to deliver this breakdown straight to your phone!
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            if active_photo is not None:
+                result = analyze_receipt(
+                    gemini_client, candidate_models,
+                    st.session_state.gemini_history, st.session_state.messages,
+                    active_photo, active_prompt_text, "chat",
+                )
+            else:
+                result = generate_answer(
+                    gemini_client, candidate_models,
+                    st.session_state.gemini_history, [active_prompt_text],
+                )
+                if result.ok:
+                    st.session_state.messages.extend([
+                        {"role": "user", "kind": "text", "content": active_prompt_text},
+                        {"role": "assistant", "kind": "text", "content": result.text},
+                    ])
+        if result.ok:
+            st.session_state.pop("pending_chat", None)
+            st.session_state.pop("chat_error", None)
+            st.rerun()
+        else:
+            st.session_state.chat_error = result.error
+            st.rerun()
